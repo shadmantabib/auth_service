@@ -1,4 +1,4 @@
-name: Run Spring Boot Tests
+name: Run Spring Boot Tests with Docker
 
 on:
   push:
@@ -15,31 +15,48 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: "temurin"
-          java-version: "17"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Cache Maven packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            ${{ runner.os }}-maven-
-
-      - name: Run tests with Maven
+      - name: Build Docker image for testing
         run: |
           cd server
-          chmod +x mvnw
-          ./mvnw clean test
+          docker build -t auth-service-test .
+
+      - name: Run tests in Docker container
+        run: |
+          cd server
+          docker run --name test-container auth-service-test ./mvnw clean test
+
+      - name: Copy test results from container
+        if: always()
+        run: |
+          cd server
+          # Copy test results from the container
+          docker cp test-container:/app/target ./target || echo "No target directory found"
+          # Clean up the container
+          docker rm test-container || true
+
+      - name: List test results (for debugging)
+        if: always()
+        run: |
+          cd server
+          find . -name "*.xml" -path "*/surefire-reports/*" || echo "No test result files found"
+          ls -la target/surefire-reports/ || echo "No surefire-reports directory"
 
       - name: Generate test report
         uses: dorny/test-reporter@v1
-        if: success() || failure()
+        if: always()
         with:
           name: Maven Tests
           path: server/target/surefire-reports/*.xml
           reporter: java-junit
-          fail-on-error: true
+          fail-on-error: false
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: server/target/surefire-reports/
+          if-no-files-found: warn
